@@ -70,6 +70,8 @@ def tobool(value):
     """
     if type(value) is bool:
         return value
+    if not isinstance(value, basestring):
+        return False
     return value.strip().lower() in ('true', '1', 'yes', 'y')
 
 
@@ -105,7 +107,7 @@ def tagname_template_validator(value):
             raise ValueError("Illegal character {0} "
                              "found in template string: {1}".format(c, value))
         tval = tval[1:]
-    if not all(matches):
+    if not all(matches.values()):
         if matches['{patch}']:
             raise ValueError(
                 '{patch} provided but {major} or {minor} missing.')
@@ -198,17 +200,17 @@ class BaseConfig(object):
         Return an instance of ArgumentParser
         to parse command line options.
         """
-        argparser = argparse.ArgumentParser(
+        argparobj = argparse.ArgumentParser(
             description="Create git tags automatically.")
-        argparser.add_argument("--repo",
-                               action="store_const",
+        argparobj.add_argument("--repo",
                                default=None,
+                               dest="repo",
                                help="Path to the repository")
-        argparser.add_argument("--message",
-                               action="store_const",
+        argparobj.add_argument("--message",
                                default=None,
+                               dest="message",
                                help="Set the message for the tag.")
-        return argparser
+        return argparobj
 
     def parse_args(self, params=None):
         """
@@ -229,9 +231,9 @@ class BaseConfig(object):
         for the tagname.
         """
         tmpl = self.tagname_template
+        tmpl = tmpl.replace('.', '\.')
         for p in ('minor', 'patch', 'major'):
             tmpl = tmpl.replace('{{{0}}}'.format(p), '(?P<{0}>\d+)'.format(p))
-        tmpl = tmpl.replace('.', '\.')
         return re.compile(tmpl)
 
 
@@ -252,7 +254,6 @@ class Config(BaseConfig):
         """
         argparser = super(Config, self).get_argparser()
         argparser.add_argument("step", nargs="?",
-                               store="const",
                                choices=["major", "minor", "patch"],
                                help="Explicitely specify whether to "
                                     "create a new major, minor or patch"
@@ -293,7 +294,7 @@ class Tag(object):
         if self.minor is not None and self.major is None:
             raise ValueError("When providing a minor version, "
                              "you also have to provide a major version.")
-        if self.patch is not None and self.minor is None:
+        if self.patch is not None and (self.minor is None or self.major is None):
             raise ValueError("When providing a patch version, you "
                              "also have to provide a major and minor version.")
 
