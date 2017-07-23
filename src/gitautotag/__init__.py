@@ -5,6 +5,17 @@ import re
 
 
 class ConfigDescriptor(object):
+    """
+    Descriptor class used in conjunction with the object class
+
+    This class will provide read-only access to configuration
+    values. Values are looked up in the following order:
+
+    1) in the parsed command line arguments
+    2) in the git configuration
+    3) default value
+    """
+
     def __init__(self,
                  fieldname,
                  sectionname="autotag",
@@ -16,6 +27,16 @@ class ConfigDescriptor(object):
         self.validator = validator
 
     def __get_raw__(self, obj):
+        """
+        Look up the field value and return it.
+
+        The values are looked up in the
+        parsed command line values contained
+        in obj.parsed_args. If they are not found there,
+        then the value provided from the git config
+        is returned. Failing that, the configured
+        default value is returned
+        """
         pargs = obj.parsed_args
         if self.fieldname in pargs:
             return pargs[self.fieldname]
@@ -26,6 +47,13 @@ class ConfigDescriptor(object):
         return self.default
 
     def __get__(self, obj, objtype):
+        """
+        Return the value of configuration setting
+        provided by self.fieldname.
+
+        If a validator routine is provided, it is called
+        with the value found and its return value returned.
+        """
         val = self.__get_raw__(obj)
         if self.validator:
             val = self.validator(val)
@@ -33,20 +61,43 @@ class ConfigDescriptor(object):
 
 
 def tobool(value):
+    """
+    Convert a value to bool.
+
+    The following values (irrespective of their case)
+    is considered to be True: true, 1, yes, y
+    All other values are considered to be False.
+    """
     if type(value) is bool:
         return value
     return value.strip().lower() in ('true', '1', 'yes', 'y')
 
 
 def tagname_template_validator(value):
+    """
+    Make sure that the provided value is a valid
+    template string for a tag.
+
+    The following conditions must be met:
+    1) The string must not be empty
+    2) The string must only contain letters, digits,
+       ., ;, _, - and comma.
+    3) Placeholders for the versions are {major}, {minor} and {patch}
+    4) If {patch} is provided, then {minor}
+       and {major} must be present.
+    5) If {minor} is provided, {major} must be provided.
+    6) {major} is required.
+    """
     reg = re.compile('([a-zA-Z\d.:,_-])')
     tval = value
+    matches = {'{patch}': False, '{minor}': False, '{major}': False}
     if not tval:
         raise ValueError('Empty tag template provided.')
     while tval:
         for p in ('{patch}', '{minor}', '{major}'):
             if tval.startswith(p):
                 tval = tval[len(p):]
+                matches[p] = True
         if not tval:
             break
         c = tval[0]
@@ -54,10 +105,20 @@ def tagname_template_validator(value):
             raise ValueError("Illegal character {0} "
                              "found in template string: {1}".format(c, value))
         tval = tval[1:]
+    if not all(matches):
+        if matches['{patch}']:
+            raise ValueError(
+                '{patch} provided but {major} or {minor} missing.')
+        elif matches['{minor}']:
+            raise ValueError('{minor} provided but {major} missing.')
     return value
 
 
 class BaseConfig(object):
+    """
+    Class to hold the configuration used in creating
+    tags.
+    """
 
     tagname_template = ConfigDescriptor("tagname_template",
                                         default="{major}.{minor}.{patch}",
@@ -77,10 +138,20 @@ class BaseConfig(object):
         self._parsed_args = None
 
     def getcwd(self):
+        """Return the current working directory."""
         return os.getcwd()
 
     @property
     def rootdir(self):
+        """
+        Determine the root directory of the repository.
+
+        If the path to the repository is not explicitely
+        provided via command line, the search for the
+        repository's root directory starts at the
+        current working directory and the search continues
+        upwards up to the root directory.
+        """
         if self._parsed_args is None:
             self.parse_args()
         if self._parsed_args.get('repo') is None:
@@ -110,17 +181,23 @@ class BaseConfig(object):
 
     @property
     def repo(self):
+        """Return the repository object."""
         if not hasattr(self, '_repo') or self._repo is None:
             self._repo = Repo(self.rootdir)
         return self._repo
 
     @property
     def parsed_args(self):
+        """Return the parsed command line arguments."""
         if not hasattr(self, '_parsed_args') or self._parsed_args is None:
             self.parse_args()
         return self._parsed_args
 
     def get_argparser(self):
+        """
+        Return an instance of ArgumentParser
+        to parse command line options.
+        """
         argparser = argparse.ArgumentParser(
             description="Create git tags automatically.")
         argparser.add_argument("--repo",
@@ -134,6 +211,10 @@ class BaseConfig(object):
         return argparser
 
     def parse_args(self, params=None):
+        """
+        Parse the command line arguments
+        and store the result in self._parsed_args
+        """
         argparser = self.get_argparser()
         if params is None:
             self._parsed_args = argparser.parse_args()
@@ -142,6 +223,11 @@ class BaseConfig(object):
 
     @property
     def tag_regex(self):
+        """
+        Return a regular expression for the
+        tags created from the template
+        for the tagname.
+        """
         tmpl = self.tagname_template
         for p in ('minor', 'patch', 'major'):
             tmpl = tmpl.replace('{{{0}}}'.format(p), '(?P<{0}>\d+)'.format(p))
@@ -150,10 +236,20 @@ class BaseConfig(object):
 
 
 class Config(BaseConfig):
+    """
+    Config class that allows to set the kind
+    of tag via command line.
+    """
 
     step = ConfigDescriptor("step", default="minor")
 
     def get_argparser(self):
+        """
+        Return an ArgumentParser instance.
+
+        An additional option to set the tag kind
+        to create is provided.
+        """
         argparser = super(Config, self).get_argparser()
         argparser.add_argument("step", nargs="?",
                                store="const",
@@ -165,18 +261,24 @@ class Config(BaseConfig):
 
 
 class MajorVersionConfig(BaseConfig):
+    """Config class creating major version tags."""
     step = "major"
 
 
 class MinorVersionConfig(BaseConfig):
+    """Config class creating minor version tags."""
     step = "minor"
 
 
 class PatchVersionConfig(BaseConfig):
+    """Config class creating patch version tags."""
     step = "patch"
 
 
 class Tag(object):
+    """
+    Class representing a tag.
+    """
 
     def __init__(self, config, major=None, minor=None, patch=None):
         self.major = major
@@ -185,6 +287,9 @@ class Tag(object):
         self.config = config
 
     def validate(self):
+        """
+        Validates the provided information for a tag.
+        """
         if self.minor is not None and self.major is None:
             raise ValueError("When providing a minor version, "
                              "you also have to provide a major version.")
@@ -193,10 +298,15 @@ class Tag(object):
                              "also have to provide a major and minor version.")
 
     def get_incremented(self):
+        """
+        Return a tag object where the version is incremented
+        with respect to the object.
+
+        The increment of the version is determined
+        from the configuration
+        """
         step = self.config.step
-        kwargs = {'major': self.major,
-                  'minor': self.minor,
-                  'patch': self.patch}
+        kwargs = self.versiondict
         if step not in ("major", "minor", "patch"):
             raise ValueError("step must be one of major, minor or patch.")
         if kwargs[step] is None:
@@ -206,6 +316,13 @@ class Tag(object):
 
     @property
     def versiondict(self):
+        """
+        Return a dictionary containing version
+        information (keys major, minor and patch).
+
+        Missing version attributes are filled
+        with a default of 0.
+        """
         dct = dict()
         for k in ('minor', 'major', 'patch'):
             v = getattr(self, k, None)
@@ -217,15 +334,22 @@ class Tag(object):
 
     @property
     def name(self):
+        """
+        Return the tag name formatted
+        according to the template provided
+        by the config.
+        """
         return self.config.tagname_template.format(**self.versiondict)
 
     @property
     def message(self):
+        """Return a formatted commit message for the tag."""
         vdict = self.versiondict
         vdict['tagname'] = self.name
         return self.config.tagmessage_template.format(**vdict)
 
     def create(self):
+        """Create a tag in the git repository."""
         msg = self.message
         name = self.name
         if self.config.pull_before_tagging:
@@ -236,6 +360,12 @@ class Tag(object):
 
     @classmethod
     def get_from_string(cls, tagstring, config):
+        """
+        Create a tag object from the passed in string and config.
+
+        :param tagstring: the string containing the tag name
+        :param config: configuration object
+        """
         m = config.tag_regex.match(tagstring)
         if not m:
             raise Exception("Tagstring {0} did not match"
@@ -245,6 +375,9 @@ class Tag(object):
 
     @classmethod
     def get_tags(cls, config, sorted=True, raise_exception=True):
+        """
+        Get all tags from the repository.
+        """
         alltags = []
         for t in config.repo.tags:
             try:
@@ -257,6 +390,10 @@ class Tag(object):
         return alltags
 
     def __gen_comp__(self, other):
+        """
+        Helper function for comparing tags
+        with each other.
+        """
         for f in ('major', 'minor', 'patch'):
             sf = getattr(self, f, None)
             of = getattr(other, f, None)
@@ -291,6 +428,11 @@ class Tag(object):
 
 
 def create_tag(config_class=Config):
+    """
+    Create a tag
+
+    :param config_class: Configuration class to use
+    """
     config = config_class()
     tags = Tag.get_tags(config)
     latest_tag = tags[-1]
@@ -299,14 +441,17 @@ def create_tag(config_class=Config):
 
 
 def create_major_version_tag():
+    """Create a major version tag"""
     create_tag(MajorVersionConfig)
 
 
 def create_minor_version_tag():
+    """Create a minor version tag"""
     create_tag(MinorVersionConfig)
 
 
 def create_patch_version_tag():
+    """Create a patch version tag"""
     create_tag(PatchVersionConfig)
 
 
