@@ -39,7 +39,7 @@ class ConfigDescriptor(object):
         """
         pargs = obj.parsed_args
         if self.fieldname in pargs:
-            return pargs[self.fieldname]
+            return getattr(pargs, self.fieldname)
         with obj.repo.config_reader() as gitconf:
             if(gitconf.has_section(self.sectionname) and
                gitconf.has_option(self.sectionname, self.fieldname)):
@@ -111,7 +111,7 @@ def tagname_template_validator(value):
         if matches['{patch}']:
             raise ValueError(
                 '{patch} provided but {major} or {minor} missing.')
-        elif matches['{minor}']:
+        elif matches['{minor}'] and not matches['{major}']:
             raise ValueError('{minor} provided but {major} missing.')
     return value
 
@@ -156,7 +156,7 @@ class BaseConfig(object):
         """
         if self._parsed_args is None:
             self.parse_args()
-        if self._parsed_args.get('repo') is None:
+        if getattr(self._parsed_args, 'repo', None) is None:
             rdir = self.getcwd()
             while True:
                 try:
@@ -174,12 +174,12 @@ class BaseConfig(object):
                 rdir = ndir
         else:
             try:
-                Repo(self._parsed_args['repo']).git_dir
+                Repo(self._parsed_args.repo).git_dir
             except InvalidGitRepositoryError:
                 raise ValueError(
                     "Path {0} does not point to a git"
-                    " repository.".format(self._parsed_args['repo']))
-            return self._parsed_args['repo']
+                    " repository.".format(self._parsed_args.repo))
+            return self._parsed_args.repo
 
     @property
     def repo(self):
@@ -276,6 +276,9 @@ class PatchVersionConfig(BaseConfig):
     step = "patch"
 
 
+class CannotParseTagError(Exception):
+    pass
+
 class Tag(object):
     """
     Class representing a tag.
@@ -313,6 +316,11 @@ class Tag(object):
         if kwargs[step] is None:
             kwargs[step] = 0
         kwargs[step] += 1
+        if step=='major':
+            kwargs['minor'] = 0
+            kwargs['patch'] = 0
+        elif step=='minor':
+            kwargs['patch'] = 0
         return self.__class__(self.config, **kwargs)
 
     @property
@@ -353,8 +361,8 @@ class Tag(object):
         """Create a tag in the git repository."""
         msg = self.message
         name = self.name
-        if self.config.pull_before_tagging:
-            self.config.repo.remote(name=self.config.remote_name).fetch()
+        if name in [t.name for t in self.config.repo.tags]:
+            raise Exception()
         newtag = self.config.repo.create_tag(name, message=msg)
         if self.config.push_after_tagging:
             self.config.repo.remote(name=self.config.remote_name).push(newtag)
@@ -382,10 +390,10 @@ class Tag(object):
         alltags = []
         for t in config.repo.tags:
             try:
-                alltags.add(cls.get_from_string(t.name, config))
+                alltags.append(cls.get_from_string(t.name, config))
             except Exception, e:
                 if raise_exception:
-                    raise e
+                    raise CannotParseTagError(e)
         if sorted:
             alltags.sort()
         return alltags
@@ -428,13 +436,14 @@ class Tag(object):
         return self.__gen_comp__(other) >= 0
 
 
-def create_tag(config_class=Config):
+def create_tag(config):
     """
     Create a tag
 
-    :param config_class: Configuration class to use
+    :param config: instance of Configuration to use
     """
-    config = config_class()
+    if config.pull_before_tagging:
+        config.repo.remote(name=config.remote_name).pull()
     tags = Tag.get_tags(config)
     latest_tag = tags[-1]
     new_tag = latest_tag.get_incremented()
@@ -443,17 +452,17 @@ def create_tag(config_class=Config):
 
 def create_major_version_tag():
     """Create a major version tag"""
-    create_tag(MajorVersionConfig)
+    create_tag(MajorVersionConfig())
 
 
 def create_minor_version_tag():
     """Create a minor version tag"""
-    create_tag(MinorVersionConfig)
+    create_tag(MinorVersionConfig())
 
 
 def create_patch_version_tag():
     """Create a patch version tag"""
-    create_tag(PatchVersionConfig)
+    create_tag(PatchVersionConfig())
 
 
 if __name__ == '__main__':

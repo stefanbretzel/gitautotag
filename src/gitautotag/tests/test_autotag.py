@@ -7,8 +7,10 @@ from gitautotag.tests import GitRepoTestCase, GitRepoWithRemoteTestCase
 import unittest
 import os
 from git import Repo
+from argparse import Namespace
 from gitautotag import ConfigDescriptor, tagname_template_validator,\
-    BaseConfig, tobool, Tag, Config
+    BaseConfig, tobool, Tag, Config, CannotParseTagError, create_tag
+from datetime import datetime
 
 
 class TestConfigDescriptor(GitRepoTestCase):
@@ -19,12 +21,12 @@ class TestConfigDescriptor(GitRepoTestCase):
         over the git setting and the default.
         """
         cls = type('TestClass', (object, ),
-                   {'parsed_args': dict(), 'repo': self.repo})
+                   {'parsed_args': Namespace(), 'repo': self.repo})
         desc = ConfigDescriptor('test', default="foo")
         with self.repo.config_writer() as wr:
             wr.set_value('gitautotagtest', 'test', 'bar')
         obj = cls()
-        obj.parsed_args['test'] = 'somedata'
+        obj.parsed_args.test = 'somedata'
         self.assertEqual(desc.__get_raw__(obj), 'somedata')
 
     def test__get_raw___from_gitconfig(self):
@@ -81,7 +83,8 @@ class TestConfigDescriptor(GitRepoTestCase):
 
         # now set the value to the required one,
         # get should just simply return it
-        obj.parsed_args['test'] = 'BAZBAZ'
+        obj.parsed_args = Namespace()
+        obj.parsed_args.test = 'BAZBAZ'
         self.assertEqual(desc.__get__(obj, None), 'BAZBAZ')
 
 
@@ -143,16 +146,16 @@ class TestBaseConfig(GitRepoTestCase):
 
     def test_rootdir__repo_arg(self):
         bc = BaseConfig()
-        bc._parsed_args = {'repo': os.path.join(self.tempdir, 'local')}
+        bc._parsed_args = Namespace(**{'repo': os.path.join(self.tempdir, 'local')})
         self.assertEqual(bc.rootdir, os.path.join(self.tempdir, 'local'))
 
-        bc._parsed_args['repo'] = self.tempdir
+        bc._parsed_args.repo = self.tempdir
         with self.assertRaises(ValueError):
             bc.rootdir
 
     def test_repo(self):
         bc = BaseConfig()
-        bc._parsed_args = {'repo': os.path.join(self.tempdir, 'local')}
+        bc._parsed_args = Namespace(**{'repo': os.path.join(self.tempdir, 'local')})
         repo = bc.repo
         self.assertTrue(type(repo) is Repo)
         self.assertEqual(repo.git_dir,
@@ -229,14 +232,18 @@ class TestTag(GitRepoWithRemoteTestCase):
 
     def test_get_incremented(self):
         cfg = Config()
-        cfg._parsed_args = {'repo': os.path.join(self.tempdir, 'local')}
+        cfg._parsed_args = Namespace()
+        cfg._parsed_args.repo =os.path.join(self.tempdir, 'local')
         tag = Tag(cfg)
         for s, ma, mi, patch in (('major', 1, 0, 0), ('minor', 1, 1, 0),
-                                 ('patch', 1, 1, 1)):
-            tag.config._parsed_args['step'] = s
+                                 ('patch', 1, 1, 1), ('major', 2, 0, 0),
+                                 ('patch', 2, 0, 1), ('minor', 2, 1, 0)):
+            tag.config._parsed_args.step = s
             tag = tag.get_incremented()
             self.assertDictEqual(tag.versiondict,
                                  {'major': ma, 'minor': mi, 'patch': patch})
+            
+        
 
     def test_get_from_string(self):
         cfg = BaseConfig()
@@ -246,7 +253,30 @@ class TestTag(GitRepoWithRemoteTestCase):
             self.assertDictEqual(tag.versiondict, td)
 
     def test_get_tags(self):
-        self.fail('TODO')
+        bc = BaseConfig()
+        bc._parsed_args = Namespace(**{'repo': os.path.join(self.tempdir, 'local')})
+        tagstrings = ("0.0.0", "0.0.1", "0.1.1", "0.0.2", "1.0.1", "1.0.0", "foobar")
+        fname = os.path.join(self.tempdir, 'local', 'foo')
+        for t in tagstrings:
+            with open(fname, 'a') as f:
+                f.write(datetime.utcnow().strftime("%Y%m%d%H%M%s%f"))
+            self.local_repo.index.add([fname])
+            self.local_repo.index.commit("testcommit")
+            self.local_repo.create_tag(t, message='Testtag "{0}"'.format(t))
+        
+        #  test with raise_exception=False, sorted=True
+        tags = [t for t in Tag.get_tags(bc, sorted=True, raise_exception=False)]
+        
+        self.assertEqual(len(tags), len(tagstrings)-1) #  as one tag could not be parsed
+        self.assertTrue(all([type(t) is Tag for t in tags]))
+        tagstrings = [t.name for t in tags]
+        self.assertListEqual(tagstrings, ["0.0.0", "0.0.1", "0.0.2", "0.1.1", "1.0.0", "1.0.1"])
+        
+        #  test with raise_exception=True, this should
+        #  raise an exception as there is a tag that
+        #  cannot be parsed with the given template
+        with self.assertRaises(CannotParseTagError):
+            [t for t in Tag.get_tags(bc, raise_exception=True)]
 
     def test___gen_comp__(self):
         config = BaseConfig()
@@ -297,8 +327,136 @@ class TestTag(GitRepoWithRemoteTestCase):
         tag = Tag(cfg, major=1, minor=2, patch=3)
         self.assertEqual(tag.message, 'Release 1.2.3.')
 
-    def test_create__no_push_and_pull(self):
-        self.fail('TODO')
+    def test_create__no_push(self):
+        cfg = BaseConfig()
+        cfg._parsed_args = Namespace(**{'repo': os.path.join(self.tempdir, 'local'),
+                            'pull_before_tagging': False,
+                            'push_after_tagging': False})
+        
+        #  create a second local repo in which we create a file,
+        #  tag which we push to remote
+        #  then creating a tag in the local repo will create
+        #  a tag with the same version as in the remote
+        other_local = os.path.join(self.tempdir, 'otherlocal')
+        other_local_repo = Repo.clone_from(self.remote_tempdir, other_local)
+        with open(os.path.join(self.tempdir, 'otherlocal', 'testfile'), 'a') as f:
+            f.write(datetime.utcnow().strftime("%Y%m%d%H%M%s%f"))
+        other_local_repo.index.add(['testfile'])
+        other_local_repo.index.commit("testcommit")
+        tagmsg = "Testtag from otherlocal"
+        tag = other_local_repo.create_tag("0.0.1", message=tagmsg)
+        other_local_repo.remotes.origin.push(tag)
+        
+        #  create a file and commit in the local repo
+        with open(os.path.join(self.local_tempdir, 'localtestfile'), 'a') as f:
+            f.write(datetime.utcnow().strftime("%Y%m%d%H%M%s%f"))
+        self.local_repo.index.add(['localtestfile'])
+        self.local_repo.index.commit("test commit in local repo.")
+        
+        # now we have a tag in the remote
+        # in the local repo
+        t = Tag(cfg, minor=0, major=0, patch=0)
+        t.create()
+        
+        # now check the tags in the local and remote repos
+        localtags = [t for t in self.local_repo.tags]
+        remotetags = [t for t in self.remote_repo.tags]
+        self.assertEqual(len(localtags), 1)
+        self.assertEqual(len(remotetags), 1)
+        
+        self.assertEqual(localtags[0].name, "0.0.0")
+        self.assertEqual(remotetags[0].name, "0.0.1")
 
-    def test_create__push_and_pull(self):
-        self.fail('TODO')
+    def test_create__push(self):
+        cfg = BaseConfig()
+        cfg._parsed_args = Namespace(**{'repo': os.path.join(self.tempdir, 'local'),
+                            'pull_before_tagging': True,
+                            'push_after_tagging': True})
+
+        #  create a file and commit in the local repo
+        with open(os.path.join(self.local_tempdir, 'localtestfile'), 'a') as f:
+            f.write(datetime.utcnow().strftime("%Y%m%d%H%M%s%f"))
+        self.local_repo.index.add(['localtestfile'])
+        self.local_repo.index.commit("test commit in local repo.")
+        
+        tag1 = Tag(cfg, major=0, minor=0, patch=1)
+        tag1.create()
+        
+        tag2 = Tag(cfg, major=1, minor=0, patch=0)
+        tag2.create()
+        
+        remote_tags = [t for t in self.remote_repo.tags]
+        local_tags = [t for t in self.remote_repo.tags]
+        self.assertEqual(len(remote_tags), 2)
+        self.assertEqual(len(local_tags), 2)
+        self.assertListEqual(sorted([t.name for t in remote_tags]), ["0.0.1","1.0.0"])
+        self.assertListEqual(sorted([t.name for t in local_tags]), ["0.0.1","1.0.0"])
+        
+        
+        
+class Test_create_tag(GitRepoWithRemoteTestCase):
+    
+    def test_no_pull_no_push(self):
+        cfg = Config()
+        cfg._parsed_args = Namespace(**{'repo': os.path.join(self.tempdir, 'local'),
+                            'pull_before_tagging': False,
+                            'push_after_tagging': False,
+                            'step': 'major'})
+
+        #  create a file and commit in the local repo
+        with open(os.path.join(self.local_tempdir, 'localtestfile'), 'a') as f:
+            f.write(datetime.utcnow().strftime("%Y%m%d%H%M%s%f"))
+        self.local_repo.index.add(['localtestfile'])
+        self.local_repo.index.commit("test commit in local repo.")
+        
+        invalid_tag = Tag(cfg, major=0, minor=0, patch=1)
+        invalid_tag.create() # create a first tag manually with version 0.0.1
+        create_tag(cfg)
+        
+        # now there should be two tags, 0.0.1 and 1.0.0
+        tags = set([t.name for t in cfg.repo.tags])
+        self.assertSetEqual(tags, set(["0.0.1", "1.0.0"]))
+        
+    def test_pull_and_push(self):
+        cfg = Config()
+        cfg._parsed_args = Namespace(**{'repo': os.path.join(self.tempdir, 'local'),
+                            'pull_before_tagging': True,
+                            'push_after_tagging': True,
+                            'step': 'major'})
+        
+        # first clone the remote to another dir,
+        # create a file and tag there and push
+        # to remote
+        other_local_tempdir = os.path.join(self.tempdir, 'other_local')
+        other_local_repo = Repo.clone_from(self.remote_tempdir, other_local_tempdir)
+        
+        sometestfile = os.path.join(other_local_tempdir, "testfile")
+        with open(sometestfile,"w") as f:
+            f.write("hallo")
+        other_local_repo.index.add([sometestfile])
+        other_local_repo.index.commit("test commit in other local repo.")
+        # now push our changes to remote and pull them in the actual
+        # test sandbox
+        other_local_repo.remote(name="origin").push("HEAD")
+        self.local_repo.remote(name="origin").pull()
+        # create a new tag and push it to remote
+        newtag = other_local_repo.create_tag("0.0.0", message="original tag")
+        other_local_repo.remote(name="origin").push(newtag)
+        
+        # create a file and commit in the actual test repo
+        localtestfile = os.path.join(self.tempdir, "local", "localtest")
+        with open(localtestfile, "w") as f:
+            f.write("localtesthallo")
+        self.local_repo.index.add([localtestfile])
+        self.local_repo.index.commit("test commit in local repo")
+        
+        # calling create_tag should first pull the tag in,
+        # and create a further version and eventually
+        # push everything to the remote
+        create_tag(cfg)
+        
+        local_tags = set([t.name for t in self.local_repo.tags])
+        remote_tags = set([t.name for t in self.remote_repo.tags])
+        expected_tags = set(["0.0.0", "1.0.0"])
+        self.assertSetEqual(local_tags, expected_tags)
+        self.assertSetEqual(remote_tags, expected_tags)
