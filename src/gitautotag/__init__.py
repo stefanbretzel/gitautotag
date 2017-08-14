@@ -2,6 +2,7 @@ from git import Repo, InvalidGitRepositoryError
 import os
 import argparse
 import re
+from six import string_types, iteritems
 
 
 class ConfigDescriptor(object):
@@ -70,7 +71,7 @@ def tobool(value):
     """
     if type(value) is bool:
         return value
-    if not isinstance(value, basestring):
+    if not isinstance(value, string_types):
         return False
     return value.strip().lower() in ('true', '1', 'yes', 'y')
 
@@ -279,6 +280,7 @@ class PatchVersionConfig(BaseConfig):
 class CannotParseTagError(Exception):
     pass
 
+
 class Tag(object):
     """
     Class representing a tag.
@@ -297,7 +299,8 @@ class Tag(object):
         if self.minor is not None and self.major is None:
             raise ValueError("When providing a minor version, "
                              "you also have to provide a major version.")
-        if self.patch is not None and (self.minor is None or self.major is None):
+        if (self.patch is not None and
+                (self.minor is None or self.major is None)):
             raise ValueError("When providing a patch version, you "
                              "also have to provide a major and minor version.")
 
@@ -316,10 +319,10 @@ class Tag(object):
         if kwargs[step] is None:
             kwargs[step] = 0
         kwargs[step] += 1
-        if step=='major':
+        if step == 'major':
             kwargs['minor'] = 0
             kwargs['patch'] = 0
-        elif step=='minor':
+        elif step == 'minor':
             kwargs['patch'] = 0
         return self.__class__(self.config, **kwargs)
 
@@ -379,7 +382,7 @@ class Tag(object):
         if not m:
             raise Exception("Tagstring {0} did not match"
                             " template.".format(tagstring))
-        kwargs = dict([(k, int(v)) for k, v in m.groupdict().iteritems()])
+        kwargs = dict([(k, int(v)) for k, v in iteritems(m.groupdict())])
         return cls(config, **kwargs)
 
     @classmethod
@@ -391,7 +394,7 @@ class Tag(object):
         for t in config.repo.tags:
             try:
                 alltags.append(cls.get_from_string(t.name, config))
-            except Exception, e:
+            except Exception as e:
                 if raise_exception:
                     raise CannotParseTagError(e)
         if sorted:
@@ -453,6 +456,11 @@ def create_tag(config):
 def create_major_version_tag():
     """Create a major version tag"""
     create_tag(MajorVersionConfig())
+
+
+def autotag():
+    """Create a tag with user specified increment"""
+    create_tag(Config())
 
 
 def create_minor_version_tag():
