@@ -414,13 +414,11 @@ class Test_create_tag(GitRepoWithRemoteTestCase):
                'pull_before_tagging': False,
                'push_after_tagging': False,
                'step': 'major'})
-
         #  create a file and commit in the local repo
         with open(os.path.join(self.local_tempdir, 'localtestfile'), 'a') as f:
             f.write(datetime.utcnow().strftime("%Y%m%d%H%M%s%f"))
         self.local_repo.index.add(['localtestfile'])
         self.local_repo.index.commit("test commit in local repo.")
-
         invalid_tag = Tag(cfg, major=0, minor=0, patch=1)
         invalid_tag.create()  # create a first tag manually with version 0.0.1
         create_tag(cfg)
