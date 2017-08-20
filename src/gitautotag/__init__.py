@@ -76,6 +76,17 @@ def tobool(value):
     return value.strip().lower() in ('true', '1', 'yes', 'y')
 
 
+def to_version_dict(value):
+    if(type(value) is tuple and len(value) <= 3
+       and len(value) > 0 and all([type(i) is int for i in value])):
+        return value
+    rawver = [int(v) for v in value.strip().split('.')]
+    if len(rawver) > 3 or len(rawver) < 1:
+        raise ValueError('Illegal format for initial tag.')
+    keys = ['major', 'minor', 'patch']
+    return dict(zip(keys, rawver))
+
+
 def tagname_template_validator(value):
     """
     Make sure that the provided value is a valid
@@ -136,6 +147,9 @@ class BaseConfig(object):
                                           default=False,
                                           validator=tobool)
     remote_name = ConfigDescriptor("remote_name", default="origin")
+
+    minimum_versions = ConfigDescriptor("minimum_versions", default="0.1.1",
+                                        validator=to_version_dict)
 
     def __init__(self):
         self._parsed_args = None
@@ -386,7 +400,7 @@ class Tag(object):
         return cls(config, **kwargs)
 
     @classmethod
-    def get_tags(cls, config, sorted=True, raise_exception=True):
+    def get_tags(cls, config, sort=True, raise_exception=True):
         """
         Get all tags from the repository.
         """
@@ -397,9 +411,21 @@ class Tag(object):
             except Exception as e:
                 if raise_exception:
                     raise CannotParseTagError(e)
-        if sorted:
+        if sort:
             alltags.sort()
         return alltags
+
+    @classmethod
+    def get_initial_tag(cls, config):
+        """
+        Return the initial (i.e. on a repo without existing tags) tag
+        based on the provided configuration.
+        """
+        step = config.step
+        minimum_versions = config.minimum_versions
+        versiondict = {'major': 0, 'minor': 0, 'patch': 0}
+        versiondict[step] = minimum_versions[step]
+        return cls(config, **versiondict)
 
     def __gen_comp__(self, other):
         """
@@ -448,8 +474,11 @@ def create_tag(config):
     if config.pull_before_tagging:
         config.repo.remote(name=config.remote_name).pull()
     tags = Tag.get_tags(config)
-    latest_tag = tags[-1]
-    new_tag = latest_tag.get_incremented()
+    if tags:
+        latest_tag = tags[-1]
+        new_tag = latest_tag.get_incremented()
+    else:
+        new_tag = Tag.get_initial_tag(config)
     new_tag.create()
 
 

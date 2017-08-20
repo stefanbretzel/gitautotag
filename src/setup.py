@@ -33,7 +33,8 @@ setup(name='git-autotag',
         'console_scripts': ['git-autotag=gitautotag:autotag',
                             'git-major=gitautotag:create_major_version_tag',
                             'git-minor=gitautotag:create_minor_version_tag',
-                            'git-patchtag=gitautotag:create_patch_version_tag'
+                            'git-patchtag=gitautotag:create_patch_version_tag',
+                            'git-maintenance=gitautotag:create_patch_version_tag'
                             ],
         },
       install_requires=install_requires,

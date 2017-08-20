@@ -266,8 +266,8 @@ class TestTag(GitRepoWithRemoteTestCase):
             self.local_repo.index.commit("testcommit")
             self.local_repo.create_tag(t, message='Testtag "{0}"'.format(t))
 
-        #  test with raise_exception=False, sorted=True
-        tags = [t for t in Tag.get_tags(bc, sorted=True,
+        #  test with raise_exception=False, sort=True
+        tags = [t for t in Tag.get_tags(bc, sort=True,
                                         raise_exception=False)]
 
         #  there should be one tag less than in tagstrings,
@@ -403,6 +403,40 @@ class TestTag(GitRepoWithRemoteTestCase):
                              ["0.0.1", "1.0.0"])
         self.assertListEqual(sorted([t.name for t in local_tags]),
                              ["0.0.1", "1.0.0"])
+
+
+class Test_create_tag_empty_repo(GitRepoTestCase):
+    """
+    Test the creation of tags in a repo, that
+    does not yet contain tags
+    """
+
+    def helper(self, expected, step):
+        cfg = Config()
+        cfg._parsed_args = Namespace(
+            **{'repo': os.path.join(self.tempdir, 'local'),
+               'pull_before_tagging': False,
+               'push_after_tagging': False,
+               'step': step,
+               'minimum_versions': '17.2.1'})
+        #  create a file and commit in the local repo
+        fname = os.path.join(self.tempdir, 'local', 'localtestfile')
+        with open(fname, 'a') as f:
+            f.write(datetime.utcnow().strftime("%Y%m%d%H%M%s%f"))
+        self.repo.index.add(['localtestfile'])
+        self.repo.index.commit("test commit in local repo.")
+        create_tag(cfg)
+        tag = [t.name for t in cfg.repo.tags][0]
+        self.assertEqual(tag, expected)
+
+    def test_major(self):
+        self.helper("17.0.0", "major")
+
+    def test_minor(self):
+        self.helper("0.2.0", "minor")
+
+    def test_patch(self):
+        self.helper("0.0.1", "patch")
 
 
 class Test_create_tag(GitRepoWithRemoteTestCase):
