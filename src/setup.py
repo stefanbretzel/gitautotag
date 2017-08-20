@@ -19,16 +19,17 @@ def get_version():
 
 install_requires = ('GitPython>=2.1.5', 'six')
 
-setup(name='git-autotag',
+setup(name='gitautotag',
       version=get_version(),
       description='Automatically create git tags.',
       author='Stefan Bretzel',
       author_email='stefan.bretzel@googlemail.com   ',
       packages=['gitautotag'],
       long_description=read('README.rst'),
-      license='GPL',
+      license='GPLv3',
       keywords = 'development git',
       platforms='any',
+      url='https://github.com/stefanbretzel/gitautotag',
       entry_points = {
         'console_scripts': ['git-autotag=gitautotag:autotag',
                             'git-major=gitautotag:create_major_version_tag',
